@@ -1,0 +1,16 @@
+# Gradle
+.gradle/
+build/
+bin/
+
+# Minecraft local run data
+run/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db

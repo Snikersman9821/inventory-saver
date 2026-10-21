@@ -1,0 +1,280 @@
+package de.snikersman9821.inventory_saver;
+
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.AbstractSliderButton;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.StringWidget;
+import net.minecraft.client.gui.components.Tooltip;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.network.chat.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+
+/**
+ * Settings screen with a manual layout: buttons first, the profile preview under them.
+ * If the window is too small for everything, the middle part scrolls with the mouse wheel.
+ */
+public class ConfigScreen extends Screen {
+    private static final int HALF = 150;
+    private static final int FULL = 304;
+    private static final int ROW = 22;
+    private static final int TOP = 20;
+    private static final int BOTTOM_BAR = 30;
+
+    private record Placed(AbstractWidget widget, int baseY) {
+    }
+
+    private final Screen parent;
+    private final List<Runnable> updaters = new ArrayList<>();
+    private final List<Placed> placed = new ArrayList<>();
+    private ProfilePreview preview;
+    private int scroll;
+    private int maxScroll;
+
+    public ConfigScreen(Screen parent) {
+        super(Component.translatable("inventory_saver.config.title"));
+        this.parent = parent;
+    }
+
+    @Override
+    protected void init() {
+        updaters.clear();
+        placed.clear();
+        Minecraft mc = Minecraft.getInstance();
+        ModConfig cfg = ModConfig.get();
+        int cx = this.width / 2;
+        int left = cx - FULL / 2;
+        int right = left + FULL - HALF;
+
+        Component title = this.getTitle().copy().withStyle(ChatFormatting.GOLD);
+        int titleW = this.font.width(title);
+        this.addRenderableWidget(new StringWidget((this.width - titleW) / 2, 6, titleW, 9, title, this.font));
+
+        int y = TOP;
+
+        // Row 1: mod on/off and profiles on/off
+        place(toggle("inventory_saver.config.enabled",
+                () -> cfg.enabled, v -> cfg.enabled = v, false, HALF), left, y);
+        place(toggle("inventory_saver.config.profiles",
+                () -> cfg.profilesEnabled, v -> cfg.profilesEnabled = v, true, HALF), right, y);
+        y += ROW;
+
+        // Row 2: profile selector, only when profiles are enabled
+        if (cfg.profilesEnabled) {
+            place(profileButton(cfg), left, y);
+            y += ROW;
+        }
+
+        // Row 3: matching behavior
+        place(toggle("inventory_saver.config.remember",
+                () -> cfg.rememberStackSizes, v -> cfg.rememberStackSizes = v, false, HALF), left, y);
+        place(toggle("inventory_saver.config.separate",
+                () -> cfg.keepStacksSeparate, v -> cfg.keepStacksSeparate = v, false, HALF), right, y);
+        y += ROW;
+
+        // Row 4: chat feedback and preview on/off
+        place(toggle("inventory_saver.config.chat_feedback",
+                () -> cfg.chatFeedback, v -> cfg.chatFeedback = v, false, HALF), left, y);
+        place(toggle("inventory_saver.config.show_preview",
+                () -> cfg.showPreview, v -> cfg.showPreview = v, true, HALF), right, y);
+        y += ROW;
+
+        // Row 5: clicks per tick slider
+        ClicksSlider slider = new ClicksSlider(FULL);
+        slider.setTooltip(tip("inventory_saver.config.clicks"));
+        place(slider, left, y);
+        y += ROW;
+
+        // Row 6: save now / restore now (only in a world)
+        boolean inWorld = mc.player != null;
+        Button saveNow = Button.builder(Component.translatable("inventory_saver.config.save_now"), b -> {
+            Minecraft m = Minecraft.getInstance();
+            m.setScreenAndShow(null);
+            InventoryActions.save(m);
+        }).bounds(0, 0, HALF, 20).tooltip(tip("inventory_saver.config.save_now")).build();
+        saveNow.active = inWorld;
+        place(saveNow, left, y);
+
+        Button restoreNow = Button.builder(Component.translatable("inventory_saver.config.restore_now"), b -> {
+            Minecraft m = Minecraft.getInstance();
+            m.setScreenAndShow(null);
+            InventoryActions.restore(m);
+        }).bounds(0, 0, HALF, 20).tooltip(tip("inventory_saver.config.restore_now")).build();
+        restoreNow.active = inWorld;
+        place(restoreNow, right, y);
+        y += ROW;
+
+        // Preview under the settings
+        if (cfg.showPreview && mc.level != null) {
+            y += 4;
+            preview = new ProfilePreview(this.font);
+            preview.build(cx, y, this::place);
+            y += preview.height();
+        } else {
+            preview = null;
+        }
+
+        int viewHeight = this.height - BOTTOM_BAR - TOP;
+        maxScroll = Math.max(0, (y - TOP) - viewHeight);
+
+        // Fixed bottom bar: reset all + done
+        int barY = this.height - 26;
+        this.addRenderableWidget(Button.builder(Component.translatable("inventory_saver.config.reset"), b -> {
+            ModConfig.resetToDefaults();
+            ModConfig.save();
+            this.rebuildWidgets();
+        }).bounds(cx - 104, barY, 100, 20).tooltip(tip("inventory_saver.config.reset")).build());
+        this.addRenderableWidget(Button.builder(Component.translatable("inventory_saver.config.done"), b -> this.onClose())
+                .bounds(cx + 4, barY, 100, 20).build());
+
+        applyScroll();
+        refresh();
+    }
+
+    /** Positions a widget (y without scroll), registers it and remembers it for scrolling. */
+    private void place(AbstractWidget widget, int x, int y) {
+        widget.setX(x);
+        widget.setY(y);
+        placed.add(new Placed(widget, y));
+        this.addRenderableWidget(widget);
+    }
+
+    private void applyScroll() {
+        scroll = Math.max(0, Math.min(maxScroll, scroll));
+        int viewTop = TOP;
+        int viewBottom = this.height - BOTTOM_BAR;
+        for (Placed p : placed) {
+            AbstractWidget w = p.widget();
+            w.setY(p.baseY() - scroll);
+            w.visible = w.getY() >= viewTop - 1 && w.getY() + w.getHeight() <= viewBottom + 1;
+        }
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (maxScroll > 0 && scrollY != 0) {
+            scroll -= (int) Math.signum(scrollY) * 16;
+            applyScroll();
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    @Override
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        if (preview != null && event.button() == 0 && mouseInView(event.y())
+                && preview.click(event.x(), event.y(), scroll)) {
+            return true;
+        }
+        return super.mouseClicked(event, doubleClick);
+    }
+
+    private boolean mouseInView(double y) {
+        return y >= TOP && y <= this.height - BOTTOM_BAR;
+    }
+
+    @Override
+    public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
+        super.extractRenderState(g, mouseX, mouseY, partialTick);
+        if (preview != null) {
+            Gfx.scissorOn(g, 0, TOP, this.width, this.height - BOTTOM_BAR);
+            preview.render(g, mouseX, mouseY, scroll, mouseInView(mouseY));
+            Gfx.scissorOff(g);
+        }
+    }
+
+    private static Tooltip tip(String key) {
+        return Tooltip.create(Component.translatable(key + ".tip"));
+    }
+
+    private static Component stateText(String key, boolean on) {
+        return Component.translatable(key)
+                .append(Component.literal(": "))
+                .append(Component.translatable(on ? "inventory_saver.state.on" : "inventory_saver.state.off")
+                        .withStyle(on ? ChatFormatting.GREEN : ChatFormatting.RED));
+    }
+
+    private Button toggle(String key, BooleanSupplier get, Consumer<Boolean> set, boolean rebuild, int width) {
+        Button button = Button.builder(Component.empty(), b -> {
+            set.accept(!get.getAsBoolean());
+            ModConfig.save();
+            if (rebuild) {
+                this.rebuildWidgets();
+            } else {
+                this.refresh();
+            }
+        }).bounds(0, 0, width, 20).tooltip(tip(key)).build();
+        updaters.add(() -> button.setMessage(stateText(key, get.getAsBoolean())));
+        return button;
+    }
+
+    private Button profileButton(ModConfig cfg) {
+        Button button = Button.builder(Component.empty(), b -> {
+            cfg.activeSlot = cfg.activeSlot % ModConfig.MAX_SAVE_SLOTS + 1;
+            ModConfig.save();
+            if (preview != null) {
+                preview.reload();
+            }
+            this.refresh();
+        }).bounds(0, 0, FULL, 20).tooltip(tip("inventory_saver.config.profile")).build();
+        updaters.add(() -> button.setMessage(Component.translatable(
+                "inventory_saver.config.profile", cfg.activeSlot, ModConfig.MAX_SAVE_SLOTS)));
+        return button;
+    }
+
+    private void refresh() {
+        for (Runnable updater : updaters) {
+            updater.run();
+        }
+    }
+
+    @Override
+    public void removed() {
+        ModConfig.save();
+    }
+
+    @Override
+    public void onClose() {
+        ModConfig.save();
+        Minecraft.getInstance().setScreenAndShow(parent);
+    }
+
+    /** Slider from 0 to MAX_CLICKS_PER_TICK. 0 means unlimited. */
+    private static final class ClicksSlider extends AbstractSliderButton {
+        ClicksSlider(int width) {
+            super(0, 0, width, 20, Component.empty(), toValue(ModConfig.get().clicksPerTick));
+            updateMessage();
+        }
+
+        private static double toValue(int clicks) {
+            return (double) clicks / ModConfig.MAX_CLICKS_PER_TICK;
+        }
+
+        private int clicks() {
+            return (int) Math.round(this.value * ModConfig.MAX_CLICKS_PER_TICK);
+        }
+
+        @Override
+        protected void updateMessage() {
+            int c = clicks();
+            Component shown = c == 0
+                    ? Component.translatable("inventory_saver.config.clicks.unlimited")
+                    : Component.literal(Integer.toString(c));
+            this.setMessage(Component.translatable("inventory_saver.config.clicks", shown));
+        }
+
+        @Override
+        protected void applyValue() {
+            int c = clicks();
+            this.value = toValue(c);
+            ModConfig.get().clicksPerTick = c;
+        }
+    }
+}

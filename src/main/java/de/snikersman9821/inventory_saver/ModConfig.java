@@ -1,0 +1,99 @@
+package de.snikersman9821.inventory_saver;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonParseException;
+import net.fabricmc.loader.api.FabricLoader;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+/**
+ * Simple config with public fields, stored with Gson in config/inventory_saver/config.json.
+ */
+public class ModConfig {
+    public static final int MAX_SAVE_SLOTS = 5;
+    public static final int MAX_CLICKS_PER_TICK = 20;
+
+    public static final boolean DEFAULT_ENABLED = true;
+    public static final boolean DEFAULT_PROFILES_ENABLED = false;
+    public static final int DEFAULT_ACTIVE_SLOT = 1;
+    public static final int DEFAULT_CLICKS_PER_TICK = 1;
+    public static final boolean DEFAULT_REMEMBER_STACK_SIZES = true;
+    public static final boolean DEFAULT_KEEP_STACKS_SEPARATE = true;
+    public static final boolean DEFAULT_CHAT_FEEDBACK = true;
+    public static final boolean DEFAULT_SHOW_PREVIEW = true;
+
+    public boolean enabled = DEFAULT_ENABLED;
+    /** If false, a single save (profile 1) is used and the profile selector is hidden. */
+    public boolean profilesEnabled = DEFAULT_PROFILES_ENABLED;
+    /** 1-based profile number, only used when profilesEnabled is true. */
+    public int activeSlot = DEFAULT_ACTIVE_SLOT;
+    /** Inventory clicks per tick. 0 = unlimited (everything in a single tick). */
+    public int clicksPerTick = DEFAULT_CLICKS_PER_TICK;
+    /** If true, stack sizes are used when matching items to slots. */
+    public boolean rememberStackSizes = DEFAULT_REMEMBER_STACK_SIZES;
+    /** If true, stacks of the same item are never merged while sorting. */
+    public boolean keepStacksSeparate = DEFAULT_KEEP_STACKS_SEPARATE;
+    /** If false, the mod sends no chat messages. */
+    public boolean chatFeedback = DEFAULT_CHAT_FEEDBACK;
+    /** If true, the settings screen shows the active profile as an inventory. */
+    public boolean showPreview = DEFAULT_SHOW_PREVIEW;
+
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+    private static ModConfig instance = new ModConfig();
+
+    public static ModConfig get() {
+        return instance;
+    }
+
+    /** The profile number that save and restore actually use. */
+    public static int effectiveSlot() {
+        return instance.profilesEnabled ? instance.activeSlot : 1;
+    }
+
+    public static void resetToDefaults() {
+        instance = new ModConfig();
+    }
+
+    public static Path dir() {
+        return FabricLoader.getInstance().getConfigDir().resolve("inventory_saver");
+    }
+
+    private static Path file() {
+        return dir().resolve("config.json");
+    }
+
+    public static void load() {
+        Path file = file();
+        if (Files.exists(file)) {
+            try {
+                ModConfig loaded = GSON.fromJson(Files.readString(file), ModConfig.class);
+                if (loaded != null) {
+                    instance = loaded;
+                }
+            } catch (IOException | JsonParseException e) {
+                InventorySaverMod.LOGGER.error("Could not read config, using defaults", e);
+                instance = new ModConfig();
+            }
+        }
+        clamp();
+        save();
+    }
+
+    public static void save() {
+        clamp();
+        try {
+            Files.createDirectories(dir());
+            Files.writeString(file(), GSON.toJson(instance));
+        } catch (IOException e) {
+            InventorySaverMod.LOGGER.error("Could not write config", e);
+        }
+    }
+
+    private static void clamp() {
+        instance.activeSlot = Math.max(1, Math.min(MAX_SAVE_SLOTS, instance.activeSlot));
+        instance.clicksPerTick = Math.max(0, Math.min(MAX_CLICKS_PER_TICK, instance.clicksPerTick));
+    }
+}

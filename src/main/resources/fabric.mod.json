@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "inventory_saver",
+  "version": "${version}",
+  "name": "Inventory Saver",
+  "description": "Saves your inventory layout and restores it with minimal inventory clicks. Client-side only.",
+  "authors": [
+    "Snikersman9821"
+  ],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "de.snikersman9821.inventory_saver.InventorySaverMod"
+    ],
+    "modmenu": [
+      "de.snikersman9821.inventory_saver.ModMenuIntegration"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.5",
+    "minecraft": "~26.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

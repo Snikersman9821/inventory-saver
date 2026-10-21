@@ -1,0 +1,136 @@
+package de.snikersman9821.inventory_saver;
+
+import com.google.gson.JsonElement;
+import com.mojang.serialization.JsonOps;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.resources.RegistryOps;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.item.ItemStack;
+
+import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * Save and restore entry points.
+ *
+ * Slot numbers are slot indices of player.inventoryMenu (container id 0), because
+ * those are the numbers handleContainerInput expects:
+ *   0        crafting result
+ *   1 - 4    crafting grid
+ *   5 - 8    armor (head, chest, legs, feet)
+ *   9 - 35   main inventory
+ *   36 - 44  hotbar
+ *   45       offhand
+ * The mod only handles slots 5 to 45. The layout is checked at runtime (46 slots).
+ */
+public final class InventoryActions {
+    public static final int FIRST_SLOT = 5;
+    public static final int LAST_SLOT = 45;
+    public static final int MENU_SIZE = 46;
+
+    private InventoryActions() {
+    }
+
+    /** " (profile 2)" when profiles are enabled, otherwise an empty string. */
+    private static String profileSuffix() {
+        return ModConfig.get().profilesEnabled ? " (profile " + ModConfig.effectiveSlot() + ")" : "";
+    }
+
+    public static void save(Minecraft mc) {
+        ModConfig cfg = ModConfig.get();
+        if (!cfg.enabled) {
+            Chat.say("The mod is disabled in the settings.");
+            return;
+        }
+        LocalPlayer player = mc.player;
+        if (player == null || mc.level == null) {
+            return;
+        }
+        if (RestoreTask.isRunning()) {
+            Chat.say("A restore is running, wait until it is finished.");
+            return;
+        }
+        InventoryMenu menu = player.inventoryMenu;
+        if (menu.slots.size() != MENU_SIZE) {
+            Chat.say("Unexpected inventory layout (" + menu.slots.size() + " slots instead of "
+                    + MENU_SIZE + "), aborting.");
+            return;
+        }
+
+        RegistryOps<JsonElement> ops = mc.level.registryAccess().createSerializationContext(JsonOps.INSTANCE);
+        InventoryStorage.SavedInventory saved = new InventoryStorage.SavedInventory();
+        saved.savedAt = System.currentTimeMillis();
+        int failed = 0;
+
+        for (int i = FIRST_SLOT; i <= LAST_SLOT; i++) {
+            ItemStack stack = menu.slots.get(i).getItem();
+            if (stack.isEmpty()) {
+                continue;
+            }
+            Optional<JsonElement> json = ItemStack.CODEC.encodeStart(ops, stack)
+                    .resultOrPartial(err -> InventorySaverMod.LOGGER.error("Could not encode stack: {}", err));
+            if (json.isPresent()) {
+                saved.stacks.put(i, json.get());
+            } else {
+                failed++;
+            }
+        }
+
+        try {
+            InventoryStorage.store(InventoryStorage.contextKey(mc), ModConfig.effectiveSlot(), saved);
+            String msg = "Saved " + saved.stacks.size() + " stacks" + profileSuffix() + ".";
+            if (failed > 0) {
+                msg += " " + failed + " stacks could not be saved.";
+            }
+            Chat.say(msg);
+        } catch (IOException e) {
+            InventorySaverMod.LOGGER.error("Could not write save file", e);
+            Chat.say("Saving failed: " + e.getMessage());
+        }
+    }
+
+    public static void restore(Minecraft mc) {
+        ModConfig cfg = ModConfig.get();
+        if (!cfg.enabled) {
+            Chat.say("The mod is disabled in the settings.");
+            return;
+        }
+        LocalPlayer player = mc.player;
+        if (player == null || mc.level == null) {
+            return;
+        }
+        if (RestoreTask.isRunning()) {
+            Chat.say("A restore is already running.");
+            return;
+        }
+
+        InventoryStorage.SavedInventory saved =
+                InventoryStorage.load(InventoryStorage.contextKey(mc), ModConfig.effectiveSlot());
+        if (saved == null || saved.stacks == null || saved.stacks.isEmpty()) {
+            Chat.say("Nothing saved yet" + profileSuffix() + " for this server/world.");
+            return;
+        }
+
+        RegistryOps<JsonElement> ops = mc.level.registryAccess().createSerializationContext(JsonOps.INSTANCE);
+        Map<Integer, ItemStack> targets = new LinkedHashMap<>();
+        int unreadable = 0;
+        for (Map.Entry<Integer, JsonElement> entry : saved.stacks.entrySet()) {
+            int slot = entry.getKey();
+            if (slot < FIRST_SLOT || slot > LAST_SLOT) {
+                continue;
+            }
+            Optional<ItemStack> stack = ItemStack.CODEC.parse(ops, entry.getValue())
+                    .resultOrPartial(err -> InventorySaverMod.LOGGER.error("Could not decode stack: {}", err));
+            if (stack.isPresent() && !stack.get().isEmpty()) {
+                targets.put(slot, stack.get());
+            } else {
+                unreadable++;
+            }
+        }
+
+        RestoreTask.start(mc, targets, unreadable, profileSuffix());
+    }
+}
