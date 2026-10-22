@@ -16,7 +16,7 @@ A simple Fabric mod for Minecraft that lets you save and restore your inventory 
 ## Building from Source
 
 ### Build Requirements
-- **Java Development Kit (JDK):** Version 25 (configured via toolchain in `build.gradle`)
-- **Gradle:** Version 9.8.2 (bundled via wrapper)
+- **Java Development Kit (JDK):** Version 25
+- **Gradle:** Version 9.8.2
 
 
