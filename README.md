@@ -1,7 +1,6 @@
 # Inventory Saver
 
-A simple Fabric mod for Minecraft that lets you save and restore your inventory using keybinds. Handy for hard modded playthroughs, testing, or just keeping a backup of your gear.
-
+A simple Fabric mod for Minecraft that lets you save and restore your inventory using keybinds. Nice if you died and need to sort your inventory quickly.
 ## Features
 - Save and load inventory
 - Profiles to save different inv states
